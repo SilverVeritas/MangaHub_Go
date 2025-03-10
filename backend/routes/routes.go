@@ -1,44 +1,27 @@
 package routes
 
 import (
+	"mangahub/backend/models"
 	"net/http"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// MangaSeries represents a manga series with its metadata
-type MangaSeries struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	CoverImage  string   `json:"coverImage"`
-	Genres      []string `json:"genres"`
+// Global metadata manager
+var metadataManager *models.MetadataManager
+
+// InitRoutes initializes the routes with the given manga root directory
+func InitRoutes(mangaRootDir string) {
+	metadataManager = models.NewMetadataManager(mangaRootDir)
 }
 
-// Chapter represents a manga chapter with its metadata
-type Chapter struct {
-	ID          string `json:"id"`
-	MangaID     string `json:"mangaId"`
-	Number      int    `json:"number"`
-	Title       string `json:"title"`
-	ReleaseDate string `json:"releaseDate"`
-	PageCount   int    `json:"pageCount"`
-}
-
-// PageResponse represents the response for a manga page
-type PageResponse struct {
-	ImageURL    string `json:"imageUrl"`
-	PageNumber  int    `json:"pageNumber"`
-	TotalPages  int    `json:"totalPages"`
-	ChapterID   string `json:"chapterId"`
-	MangaID     string `json:"mangaId"`
-	NextChapter string `json:"nextChapter,omitempty"`
-	PrevChapter string `json:"prevChapter,omitempty"`
-}
-
-// setupRoutes configures all the API routes for the manga reader
+// SetupRoutes configures all the API routes for the manga reader
 func SetupRoutes(router *gin.Engine) {
 	// API Group
 	api := router.Group("/api")
@@ -70,133 +53,282 @@ func SetupRoutes(router *gin.Engine) {
 
 // listManga returns a list of all available manga series
 func listManga(c *gin.Context) {
-	// TODO: Implement fetching manga list from filesystem or database
-	// For now, return sample data
-	manga := []MangaSeries{
-		{
-			ID:          "one-piece",
-			Title:       "One Piece",
-			Description: "The story follows the adventures of Monkey D. Luffy, a boy whose body gained the properties of rubber after unintentionally eating a Devil Fruit.",
-			CoverImage:  "/manga-images/one-piece/cover.jpg",
-			Genres:      []string{"Adventure", "Fantasy", "Action"},
-		},
-		{
-			ID:          "naruto",
-			Title:       "Naruto",
-			Description: "It tells the story of Naruto Uzumaki, a young ninja who seeks recognition from his peers and dreams of becoming the Hokage, the leader of his village.",
-			CoverImage:  "/manga-images/naruto/cover.jpg",
-			Genres:      []string{"Action", "Adventure", "Fantasy"},
-		},
+	mangas, err := metadataManager.ScanForManga()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga list: " + err.Error()})
+		return
 	}
 
-	c.JSON(http.StatusOK, manga)
+	// Convert to response format
+	var response []gin.H
+	for _, manga := range mangas {
+		response = append(response, gin.H{
+			"id":           manga.ID,
+			"title":        manga.Title,
+			"description":  manga.Description,
+			"coverImage":   manga.GetCoverImageURL(),
+			"genres":       manga.Genres,
+			"author":       manga.Author,
+			"status":       manga.Status,
+			"chapterCount": manga.ChapterCount,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // getManga returns details about a specific manga
 func getManga(c *gin.Context) {
 	id := c.Param("id")
 
-	// TODO: Implement fetching specific manga details
-	// For now, return sample data
-	manga := MangaSeries{
-		ID:          id,
-		Title:       "Sample Manga",
-		Description: "This is a sample manga description.",
-		CoverImage:  filepath.Join("/manga-images", id, "cover.jpg"),
-		Genres:      []string{"Action", "Adventure"},
+	manga, err := metadataManager.GetMangaByID(id)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
 	}
 
-	c.JSON(http.StatusOK, manga)
+	// Map to response
+	response := gin.H{
+		"id":            manga.ID,
+		"title":         manga.Title,
+		"description":   manga.Description,
+		"coverImage":    manga.GetCoverImageURL(),
+		"genres":        manga.Genres,
+		"author":        manga.Author,
+		"artist":        manga.Artist,
+		"status":        manga.Status,
+		"publishedYear": manga.PublishedYear,
+		"lastUpdated":   manga.LastUpdated,
+		"chapterCount":  manga.ChapterCount,
+		"altTitles":     manga.AltTitles,
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // listChapters returns a list of chapters for a specific manga
 func listChapters(c *gin.Context) {
 	mangaID := c.Param("id")
 
-	// TODO: Implement fetching chapters from filesystem or database
-	// For now, return sample data
-	chapters := []Chapter{
-		{
-			ID:          "1",
-			MangaID:     mangaID,
-			Number:      1,
-			Title:       "The Beginning",
-			ReleaseDate: "2023-01-01",
-			PageCount:   45,
-		},
-		{
-			ID:          "2",
-			MangaID:     mangaID,
-			Number:      2,
-			Title:       "The Journey Continues",
-			ReleaseDate: "2023-01-15",
-			PageCount:   38,
-		},
+	manga, err := metadataManager.GetMangaByID(mangaID)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
 	}
 
-	c.JSON(http.StatusOK, chapters)
+	chapters, err := metadataManager.ScanForChapters(manga)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chapters: " + err.Error()})
+		return
+	}
+
+	// Sort chapters by number (implement in models package or here)
+	// For simplicity, I'll do it here, but it could be moved to a model method
+
+	// Convert to response format
+	var response []gin.H
+	for _, chapter := range chapters {
+		response = append(response, gin.H{
+			"id":          chapter.ID,
+			"mangaId":     chapter.MangaID,
+			"number":      chapter.Number,
+			"title":       chapter.Title,
+			"releaseDate": chapter.ReleaseDate,
+			"pageCount":   chapter.PageCount,
+			"volume":      chapter.Volume,
+			"special":     chapter.Special,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // getChapter returns details about a specific chapter
 func getChapter(c *gin.Context) {
 	mangaID := c.Param("id")
-	chapterNumber, err := strconv.Atoi(c.Param("chapterNumber"))
+	chapterNumberStr := c.Param("chapterNumber")
+
+	chapterNumber, err := strconv.ParseFloat(chapterNumberStr, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter number"})
 		return
 	}
 
-	// TODO: Implement fetching chapter details
-	// For now, return sample data
-	chapter := Chapter{
-		ID:          c.Param("chapterNumber"),
-		MangaID:     mangaID,
-		Number:      chapterNumber,
-		Title:       "Sample Chapter",
-		ReleaseDate: "2023-01-01",
-		PageCount:   45,
+	manga, err := metadataManager.GetMangaByID(mangaID)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
 	}
 
-	c.JSON(http.StatusOK, chapter)
+	chapters, err := metadataManager.ScanForChapters(manga)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chapters: " + err.Error()})
+		return
+	}
+
+	// Find the requested chapter
+	var targetChapter *models.Chapter
+	for i := range chapters {
+		if chapters[i].Number == chapterNumber {
+			targetChapter = &chapters[i]
+			break
+		}
+	}
+
+	if targetChapter == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chapter not found"})
+		return
+	}
+
+	// Get pages for this chapter
+	pages, err := targetChapter.GetPages()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve pages: " + err.Error()})
+		return
+	}
+
+	// Convert to response format
+	response := gin.H{
+		"id":          targetChapter.ID,
+		"mangaId":     targetChapter.MangaID,
+		"number":      targetChapter.Number,
+		"title":       targetChapter.Title,
+		"releaseDate": targetChapter.ReleaseDate,
+		"pageCount":   targetChapter.PageCount,
+		"volume":      targetChapter.Volume,
+		"special":     targetChapter.Special,
+		"pages":       []gin.H{},
+	}
+
+	// Add page info
+	pagesList := []gin.H{}
+	for _, page := range pages {
+		pagesList = append(pagesList, gin.H{
+			"number":   page.Number,
+			"imageUrl": page.GetImageURL(),
+		})
+	}
+	response["pages"] = pagesList
+
+	c.JSON(http.StatusOK, response)
 }
 
 // getPage returns a specific page from a chapter
 func getPage(c *gin.Context) {
 	mangaID := c.Param("id")
-	chapterNumber, err := strconv.Atoi(c.Param("chapterNumber"))
+	chapterNumberStr := c.Param("chapterNumber")
+	pageNumberStr := c.Param("pageNumber")
+
+	chapterNumber, err := strconv.ParseFloat(chapterNumberStr, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter number"})
 		return
 	}
 
-	pageNumber, err := strconv.Atoi(c.Param("pageNumber"))
+	pageNumber, err := strconv.Atoi(pageNumberStr)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid page number"})
 		return
 	}
 
-	// TODO: Implement fetching page details
-	// For now, return sample data
-	totalPages := 45
-
-	pageResponse := PageResponse{
-		ImageURL:   filepath.Join("/manga-images", mangaID, strconv.Itoa(chapterNumber), strconv.Itoa(pageNumber)+".jpg"),
-		PageNumber: pageNumber,
-		TotalPages: totalPages,
-		ChapterID:  strconv.Itoa(chapterNumber),
-		MangaID:    mangaID,
+	manga, err := metadataManager.GetMangaByID(mangaID)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
 	}
 
-	// Add next/previous chapter links if applicable
-	if pageNumber >= totalPages {
-		pageResponse.NextChapter = strconv.Itoa(chapterNumber + 1)
+	chapters, err := metadataManager.ScanForChapters(manga)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chapters: " + err.Error()})
+		return
 	}
 
-	if chapterNumber > 1 && pageNumber == 1 {
-		pageResponse.PrevChapter = strconv.Itoa(chapterNumber - 1)
+	// Find the requested chapter
+	var targetChapter *models.Chapter
+	var chapterIndex int
+	for i := range chapters {
+		if chapters[i].Number == chapterNumber {
+			targetChapter = &chapters[i]
+			chapterIndex = i
+			break
+		}
 	}
 
-	c.JSON(http.StatusOK, pageResponse)
+	if targetChapter == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chapter not found"})
+		return
+	}
+
+	// Get pages for this chapter
+	pages, err := targetChapter.GetPages()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve pages: " + err.Error()})
+		return
+	}
+
+	// Find the requested page
+	var targetPage *models.Page
+	for i := range pages {
+		if pages[i].Number == pageNumber {
+			targetPage = &pages[i]
+			break
+		}
+	}
+
+	if targetPage == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Page not found"})
+		return
+	}
+
+	// Determine next and previous chapters
+	var nextChapter, prevChapter string
+
+	// If this is the last page of the current chapter
+	if pageNumber >= len(pages) && chapterIndex < len(chapters)-1 {
+		nextChapter = strconv.FormatFloat(chapters[chapterIndex+1].Number, 'f', -1, 64)
+	}
+
+	// If this is the first page of the current chapter
+	if pageNumber == 1 && chapterIndex > 0 {
+		prevChapter = strconv.FormatFloat(chapters[chapterIndex-1].Number, 'f', -1, 64)
+	}
+
+	// Create the response
+	response := gin.H{
+		"imageUrl":   targetPage.GetImageURL(),
+		"pageNumber": targetPage.Number,
+		"totalPages": len(pages),
+		"chapterID":  targetChapter.ID,
+		"mangaID":    mangaID,
+		"nextPage":   targetPage.GetNextPageNumber(),
+		"prevPage":   targetPage.GetPrevPageNumber(),
+	}
+
+	if nextChapter != "" {
+		response["nextChapter"] = nextChapter
+	}
+
+	if prevChapter != "" {
+		response["prevChapter"] = prevChapter
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // searchManga handles searching for manga by title or filtering by genres
@@ -204,88 +336,375 @@ func searchManga(c *gin.Context) {
 	query := c.Query("q")
 	genre := c.Query("genre")
 
-	// TODO: Implement actual search functionality
-	// For now, return sample filtered data
-	var results []MangaSeries
-
-	if query != "" || genre != "" {
-		results = []MangaSeries{
-			{
-				ID:          "sample-manga",
-				Title:       "Sample Search Result",
-				Description: "This is a sample search result.",
-				CoverImage:  "/manga-images/sample-manga/cover.jpg",
-				Genres:      []string{"Action", "Adventure"},
-			},
-		}
-	} else {
-		results = []MangaSeries{}
+	mangas, err := metadataManager.ScanForManga()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga list: " + err.Error()})
+		return
 	}
 
-	c.JSON(http.StatusOK, results)
+	// Filter manga based on search criteria
+	var results []models.MangaSeries
+	for _, manga := range mangas {
+		// Filter by title if query is provided
+		if query != "" {
+			if !containsIgnoreCase(manga.Title, query) && !containsIgnoreCase(manga.Description, query) {
+				// Check alt titles too
+				found := false
+				for _, altTitle := range manga.AltTitles {
+					if containsIgnoreCase(altTitle, query) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					continue
+				}
+			}
+		}
+
+		// Filter by genre if provided
+		if genre != "" {
+			found := false
+			for _, g := range manga.Genres {
+				if equalIgnoreCase(g, genre) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				continue
+			}
+		}
+
+		results = append(results, manga)
+	}
+
+	// Convert to response format
+	var response []gin.H
+	for _, manga := range results {
+		response = append(response, gin.H{
+			"id":          manga.ID,
+			"title":       manga.Title,
+			"description": manga.Description,
+			"coverImage":  manga.GetCoverImageURL(),
+			"genres":      manga.Genres,
+			"author":      manga.Author,
+		})
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 // Admin route handlers - these would be protected in a production environment
 
 // addManga adds a new manga series
 func addManga(c *gin.Context) {
-	var manga MangaSeries
-	if err := c.ShouldBindJSON(&manga); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var requestManga struct {
+		Title       string   `json:"title" binding:"required"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Artist      string   `json:"artist"`
+		Genres      []string `json:"genres"`
+		Status      string   `json:"status"`
+	}
+
+	if err := c.ShouldBindJSON(&requestManga); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
 
-	// TODO: Implement adding manga to filesystem or database
+	// Create a manga ID from the title
+	id := createSlug(requestManga.Title)
 
-	c.JSON(http.StatusCreated, manga)
+	// Check if manga already exists
+	if _, err := metadataManager.GetMangaByID(id); err == nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Manga with this ID already exists"})
+		return
+	}
+
+	// Create the manga directory
+	mangaPath := filepath.Join(metadataManager.RootDir, id)
+	if err := os.MkdirAll(mangaPath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create manga directory: " + err.Error()})
+		return
+	}
+
+	// Create the manga metadata
+	manga := models.MangaSeries{
+		ID:          id,
+		Title:       requestManga.Title,
+		Description: requestManga.Description,
+		Author:      requestManga.Author,
+		Artist:      requestManga.Artist,
+		Genres:      requestManga.Genres,
+		Status:      requestManga.Status,
+		Path:        mangaPath,
+	}
+
+	// Save metadata
+	metadataPath := filepath.Join(mangaPath, models.MetadataFileName)
+	if err := manga.SaveToJSON(metadataPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save manga metadata: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          manga.ID,
+		"title":       manga.Title,
+		"description": manga.Description,
+		"author":      manga.Author,
+		"artist":      manga.Artist,
+		"genres":      manga.Genres,
+		"status":      manga.Status,
+	})
 }
 
 // updateManga updates an existing manga series
 func updateManga(c *gin.Context) {
 	id := c.Param("id")
-	var manga MangaSeries
-	if err := c.ShouldBindJSON(&manga); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
+	var requestManga struct {
+		Title       string   `json:"title"`
+		Description string   `json:"description"`
+		Author      string   `json:"author"`
+		Artist      string   `json:"artist"`
+		Genres      []string `json:"genres"`
+		Status      string   `json:"status"`
+	}
+
+	if err := c.ShouldBindJSON(&requestManga); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
 
-	manga.ID = id
+	// Get existing manga
+	manga, err := metadataManager.GetMangaByID(id)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
+	}
 
-	// TODO: Implement updating manga in filesystem or database
+	// Update fields if provided
+	if requestManga.Title != "" {
+		manga.Title = requestManga.Title
+	}
+	if requestManga.Description != "" {
+		manga.Description = requestManga.Description
+	}
+	if requestManga.Author != "" {
+		manga.Author = requestManga.Author
+	}
+	if requestManga.Artist != "" {
+		manga.Artist = requestManga.Artist
+	}
+	if len(requestManga.Genres) > 0 {
+		manga.Genres = requestManga.Genres
+	}
+	if requestManga.Status != "" {
+		manga.Status = requestManga.Status
+	}
 
-	c.JSON(http.StatusOK, manga)
+	// Save metadata
+	metadataPath := filepath.Join(manga.Path, models.MetadataFileName)
+	if err := manga.SaveToJSON(metadataPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save manga metadata: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":          manga.ID,
+		"title":       manga.Title,
+		"description": manga.Description,
+		"author":      manga.Author,
+		"artist":      manga.Artist,
+		"genres":      manga.Genres,
+		"status":      manga.Status,
+	})
 }
 
 // addChapter adds a new chapter to a manga series
 func addChapter(c *gin.Context) {
 	mangaID := c.Param("id")
-	var chapter Chapter
-	if err := c.ShouldBindJSON(&chapter); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+
+	var requestChapter struct {
+		Number  float64 `json:"number" binding:"required"`
+		Title   string  `json:"title"`
+		Volume  int     `json:"volume"`
+		Special bool    `json:"special"`
+	}
+
+	if err := c.ShouldBindJSON(&requestChapter); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
 
-	chapter.MangaID = mangaID
+	// Get existing manga
+	manga, err := metadataManager.GetMangaByID(mangaID)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
+	}
 
-	// TODO: Implement adding chapter to filesystem or database
+	// Create a chapter ID from the number
+	chapterID := "chapter-" + strconv.FormatFloat(requestChapter.Number, 'f', 1, 64)
+	chapterID = createSlug(chapterID)
 
-	c.JSON(http.StatusCreated, chapter)
+	// Create the chapter directory
+	chapterPath := filepath.Join(manga.Path, chapterID)
+	if err := os.MkdirAll(chapterPath, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create chapter directory: " + err.Error()})
+		return
+	}
+
+	// Create the chapter metadata
+	chapter := models.Chapter{
+		ID:          chapterID,
+		MangaID:     mangaID,
+		Number:      requestChapter.Number,
+		Title:       requestChapter.Title,
+		ReleaseDate: timeNow(),
+		Path:        chapterPath,
+		Volume:      requestChapter.Volume,
+		Special:     requestChapter.Special,
+	}
+
+	// Save metadata
+	metadataPath := filepath.Join(chapterPath, models.MetadataFileName)
+	if err := chapter.SaveToJSON(metadataPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save chapter metadata: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"id":          chapter.ID,
+		"mangaId":     chapter.MangaID,
+		"number":      chapter.Number,
+		"title":       chapter.Title,
+		"releaseDate": chapter.ReleaseDate,
+		"volume":      chapter.Volume,
+		"special":     chapter.Special,
+	})
 }
 
 // updateChapter updates an existing chapter
 func updateChapter(c *gin.Context) {
 	mangaID := c.Param("id")
-	chapterNumber := c.Param("chapterNumber")
-	var chapter Chapter
-	if err := c.ShouldBindJSON(&chapter); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	chapterNumberStr := c.Param("chapterNumber")
+
+	chapterNumber, err := strconv.ParseFloat(chapterNumberStr, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid chapter number"})
 		return
 	}
 
-	chapter.MangaID = mangaID
-	chapter.ID = chapterNumber
+	var requestChapter struct {
+		Title   string `json:"title"`
+		Volume  int    `json:"volume"`
+		Special bool   `json:"special"`
+	}
 
-	// TODO: Implement updating chapter in filesystem or database
+	if err := c.ShouldBindJSON(&requestChapter); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+		return
+	}
 
-	c.JSON(http.StatusOK, chapter)
+	// Get existing manga
+	manga, err := metadataManager.GetMangaByID(mangaID)
+	if err != nil {
+		if models.IsMangaNotFoundError(err) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Manga not found"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve manga: " + err.Error()})
+		}
+		return
+	}
+
+	// Get chapters
+	chapters, err := metadataManager.ScanForChapters(manga)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to retrieve chapters: " + err.Error()})
+		return
+	}
+
+	// Find the chapter to update
+	var targetChapter *models.Chapter
+	for i := range chapters {
+		if chapters[i].Number == chapterNumber {
+			targetChapter = &chapters[i]
+			break
+		}
+	}
+
+	if targetChapter == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Chapter not found"})
+		return
+	}
+
+	// Update fields if provided
+	if requestChapter.Title != "" {
+		targetChapter.Title = requestChapter.Title
+	}
+	targetChapter.Volume = requestChapter.Volume
+	targetChapter.Special = requestChapter.Special
+
+	// Save metadata
+	metadataPath := filepath.Join(targetChapter.Path, models.MetadataFileName)
+	if err := targetChapter.SaveToJSON(metadataPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save chapter metadata: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id":          targetChapter.ID,
+		"mangaId":     targetChapter.MangaID,
+		"number":      targetChapter.Number,
+		"title":       targetChapter.Title,
+		"releaseDate": targetChapter.ReleaseDate,
+		"volume":      targetChapter.Volume,
+		"special":     targetChapter.Special,
+	})
+}
+
+// Helper functions
+
+// containsIgnoreCase checks if a string contains a substring, ignoring case
+func containsIgnoreCase(s, substr string) bool {
+	s = strings.ToLower(s)
+	substr = strings.ToLower(substr)
+	return strings.Contains(s, substr)
+}
+
+// equalIgnoreCase checks if two strings are equal, ignoring case
+func equalIgnoreCase(s1, s2 string) bool {
+	return strings.ToLower(s1) == strings.ToLower(s2)
+}
+
+// createSlug creates a URL-friendly slug from a string
+func createSlug(s string) string {
+	// Replace spaces and special characters with hyphens
+	slug := strings.ToLower(s)
+	slug = strings.ReplaceAll(slug, " ", "-")
+	// Remove non-alphanumeric characters (except hyphens)
+	reg := regexp.MustCompile(`[^a-z0-9\-]`)
+	slug = reg.ReplaceAllString(slug, "")
+	// Remove consecutive hyphens
+	for strings.Contains(slug, "--") {
+		slug = strings.ReplaceAll(slug, "--", "-")
+	}
+	// Trim hyphens from start and end
+	slug = strings.Trim(slug, "-")
+	return slug
+}
+
+// timeNow returns the current time
+func timeNow() time.Time {
+	return time.Now()
 }

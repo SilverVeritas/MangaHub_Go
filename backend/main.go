@@ -100,6 +100,7 @@ func main() {
 	setupStaticDirs(config, router)
 
 	// Setup API routes
+	routes.InitRoutes(config.MangaRootDir)
 	routes.SetupRoutes(router)
 
 	// Start the server

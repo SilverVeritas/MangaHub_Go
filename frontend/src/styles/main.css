@@ -1,0 +1,66 @@
+:root {
+    --primary-color: #3498db;
+    --secondary-color: #2ecc71;
+    --background-color: #f5f5f5;
+    --text-color: #333;
+    --manga-grid-gap: 20px;
+  }
+  
+  body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: var(--background-color);
+    color: var(--text-color);
+    line-height: 1.6;
+  }
+  
+  .manga-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: var(--manga-grid-gap);
+    padding: 20px;
+  }
+  
+  .manga-card {
+    background: white;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    transition: transform 0.3s ease;
+  }
+  
+  .manga-card:hover {
+    transform: translateY(-5px);
+  }
+  
+  .manga-cover {
+    width: 100%;
+    aspect-ratio: 2/3;
+    object-fit: cover;
+  }
+  
+  .manga-info {
+    padding: 12px;
+  }
+  
+  .manga-title {
+    font-weight: bold;
+    margin: 0 0 8px 0;
+  }
+  
+  /* Reader styles */
+  .reader-container {
+    max-width: 100%;
+    text-align: center;
+  }
+  
+  .reader-image {
+    max-width: 100%;
+    max-height: 90vh;
+  }
+  
+  .reader-controls {
+    display: flex;
+    justify-content: space-between;
+    padding: 15px;
+    background: rgba(0, 0, 0, 0.05);
+  }

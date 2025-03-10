@@ -1,0 +1,51 @@
+# Go related
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# Frontend related
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+# Backend compiled frontend
+backend/static/
+
+# Dependency directories
+vendor/
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Debug files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+debug
+debug.test
+
+# Manga content directory (uncomment if needed)
+# manga/
+
+# Log files
+*.log
+logs/
+
+# Local configuration files
+.env
+*.local
