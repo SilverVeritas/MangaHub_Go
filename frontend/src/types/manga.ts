@@ -32,4 +32,9 @@ export interface Manga {
     imageUrl: string;
     chapterId: string;
     mangaId: string;
+    totalPages?: number;
+    nextPage?: number;
+    prevPage?: number;
+    nextChapter?: string;
+    prevChapter?: string;
   }

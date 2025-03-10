@@ -49,3 +49,5 @@ logs/
 # Local configuration files
 .env
 *.local
+
+manga/
