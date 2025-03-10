@@ -6,7 +6,7 @@ import (
 	"mangahub/backend/routes"
 	"net/http"
 	"os"
-	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -23,7 +23,7 @@ func loadConfig() Config {
 	// In a real application, you might load this from a file or environment variables
 	return Config{
 		Port:         "8080",
-		MangaRootDir: "./manga",
+		MangaRootDir: "../manga",
 		LogFile:      "./manga-server.log",
 	}
 }
@@ -54,9 +54,8 @@ func setupStaticDirs(config Config, router *gin.Engine) {
 
 	// Serve the main HTML file for all routes not matched
 	router.NoRoute(func(c *gin.Context) {
-		// Only serve the index file for regular page requests, not for API or static files
 		path := c.Request.URL.Path
-		if filepath.Ext(path) == "" && !filepath.HasPrefix(path, "/api") {
+		if !strings.HasPrefix(path, "/api") && !strings.HasPrefix(path, "/manga-images") {
 			c.File("./static/index.html")
 		} else {
 			c.Status(http.StatusNotFound)

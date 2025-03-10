@@ -1,14 +1,19 @@
 import { defineConfig } from 'vite';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  // Output directory - this will build to your Go server's static directory
   build: {
     outDir: '../backend/static',
-    emptyOutDir: true
+    emptyOutDir: true,
+    rollupOptions: {
+      input: path.resolve(__dirname, 'index.html')
+    }
   },
-  // Base path for asset URLs
+  publicDir: 'public',
   base: '/',
-  // Enable SPA routing support
   server: {
     proxy: {
       '/api': {
