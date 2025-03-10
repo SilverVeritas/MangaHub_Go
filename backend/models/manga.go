@@ -5,9 +5,17 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"go.uber.org/zap"
 )
 
-// MangaSeries represents a manga series with all its metadata
+var mangaLogger *zap.Logger
+
+func init() {
+	l, _ := zap.NewDevelopment()
+	mangaLogger = l
+}
+
 type MangaSeries struct {
 	ID            string    `json:"id"`
 	Title         string    `json:"title"`
@@ -21,63 +29,106 @@ type MangaSeries struct {
 	LastUpdated   time.Time `json:"lastUpdated"`
 	ChapterCount  int       `json:"chapterCount"`
 	AltTitles     []string  `json:"altTitles,omitempty"`
-	Path          string    `json:"-"` // Internal use only, not exported to JSON
+	Path          string    `json:"-"` // Internal use only
 }
 
-// Validate checks if the manga has all required fields
 func (m *MangaSeries) Validate() error {
+	mangaLogger.Debug("Validate called",
+		zap.String("mangaID", m.ID),
+		zap.String("title", m.Title),
+	)
 	if m.ID == "" {
+		mangaLogger.Warn("Validation failed: ID is empty")
 		return NewValidationError("manga ID is required")
 	}
 	if m.Title == "" {
+		mangaLogger.Warn("Validation failed: title is empty", zap.String("mangaID", m.ID))
 		return NewValidationError("manga title is required")
 	}
 	return nil
 }
 
-// LoadFromJSON loads manga metadata from a JSON file
 func (m *MangaSeries) LoadFromJSON(path string) error {
+	mangaLogger.Info("LoadFromJSON called",
+		zap.String("path", path),
+	)
+
 	file, err := os.ReadFile(path)
 	if err != nil {
+		mangaLogger.Error("Failed to read manga metadata file",
+			zap.String("path", path),
+			zap.Error(err),
+		)
 		return NewMetadataError("failed to read manga metadata: " + err.Error())
 	}
 
 	if err := json.Unmarshal(file, m); err != nil {
+		mangaLogger.Error("Failed to parse manga metadata",
+			zap.String("path", path),
+			zap.Error(err),
+		)
 		return NewMetadataError("failed to parse manga metadata: " + err.Error())
 	}
 
-	// Set the filesystem path
 	m.Path = filepath.Dir(path)
 
+	mangaLogger.Info("Manga metadata loaded",
+		zap.String("mangaID", m.ID),
+		zap.String("title", m.Title),
+		zap.String("path", m.Path),
+	)
 	return nil
 }
 
-// SaveToJSON saves manga metadata to a JSON file
 func (m *MangaSeries) SaveToJSON(path string) error {
+	mangaLogger.Info("SaveToJSON called",
+		zap.String("mangaID", m.ID),
+		zap.String("path", path),
+	)
 	data, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
+		mangaLogger.Error("Failed to marshal manga metadata",
+			zap.String("mangaID", m.ID),
+			zap.Error(err),
+		)
 		return NewMetadataError("failed to marshal manga metadata: " + err.Error())
 	}
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
+		mangaLogger.Error("Failed to write manga metadata",
+			zap.String("mangaID", m.ID),
+			zap.String("path", path),
+			zap.Error(err),
+		)
 		return NewMetadataError("failed to write manga metadata: " + err.Error())
 	}
 
+	mangaLogger.Info("Manga metadata saved", zap.String("mangaID", m.ID))
 	return nil
 }
 
-// GetChaptersPath returns the path where chapters for this manga are stored
 func (m *MangaSeries) GetChaptersPath() string {
+	mangaLogger.Debug("GetChaptersPath called",
+		zap.String("mangaID", m.ID),
+		zap.String("path", m.Path),
+	)
 	return m.Path
 }
 
-// GetCoverImagePath returns the absolute path to the cover image
 func (m *MangaSeries) GetCoverImagePath() string {
-	return filepath.Join(m.Path, filepath.Base(m.CoverImage))
+	fullPath := filepath.Join(m.Path, filepath.Base(m.CoverImage))
+	mangaLogger.Debug("GetCoverImagePath called",
+		zap.String("mangaID", m.ID),
+		zap.String("coverImagePath", fullPath),
+	)
+	return fullPath
 }
 
-// GetCoverImageURL returns the URL for the cover image
 func (m *MangaSeries) GetCoverImageURL() string {
-	// This will need to be adjusted based on your static file serving setup
-	return "/manga-images/" + m.ID + "/" + filepath.Base(m.CoverImage)
+	url := "/manga-images/" + m.ID + "/" + filepath.Base(m.CoverImage)
+	mangaLogger.Debug("GetCoverImageURL called",
+		zap.String("mangaID", m.ID),
+		zap.String("coverImageURL", url),
+	)
+	return url
 }

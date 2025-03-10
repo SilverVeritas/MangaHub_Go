@@ -2,14 +2,15 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"mangahub/backend/routes"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // Config stores application configuration
@@ -19,8 +20,8 @@ type Config struct {
 	LogFile      string
 }
 
+// In a real application, you might load this from a file or environment variables
 func loadConfig() Config {
-	// In a real application, you might load this from a file or environment variables
 	return Config{
 		Port:         "8080",
 		MangaRootDir: "../manga",
@@ -28,38 +29,67 @@ func loadConfig() Config {
 	}
 }
 
-func setupLogger(config Config) *os.File {
-	logFile, err := os.OpenFile(config.LogFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+// We'll use a package-level logger for convenience
+var zapLogger *zap.Logger
+
+// setupZapLogger initializes the Zap logger
+func setupZapLogger(config Config) {
+	// For production, you could use zap.NewProduction() instead
+	logger, err := zap.NewDevelopment()
 	if err != nil {
-		log.Fatalf("Error opening log file: %v", err)
+		panic("Failed to initialize Zap logger: " + err.Error())
 	}
-	log.SetOutput(logFile)
-	return logFile
+	zapLogger = logger
 }
 
+// setupStaticDirs configures static file serving, including the "manga-images" folder
 func setupStaticDirs(config Config, router *gin.Engine) {
 	// Ensure manga directory exists
 	if _, err := os.Stat(config.MangaRootDir); os.IsNotExist(err) {
 		err := os.MkdirAll(config.MangaRootDir, 0755)
 		if err != nil {
-			log.Fatalf("Failed to create manga directory: %v", err)
+			zapLogger.Fatal("Failed to create manga directory",
+				zap.String("directory", config.MangaRootDir),
+				zap.Error(err))
 		}
 	}
 
-	// Serve static files (manga images)
+	// Serve manga images
 	router.Static("/manga-images", config.MangaRootDir)
 
-	// Serve frontend static files
-	router.Static("/static", "./static")
+	// First build the frontend if you haven't already:
+	// cd frontend && npm run build
 
-	// Serve the main HTML file for all routes not matched
+	// Serve static files from the assets directory if it exists
+	assetsPath := "./static/assets"
+	if _, err := os.Stat(assetsPath); err == nil {
+		router.Static("/assets", assetsPath)
+	}
+
+	// Serve individual static files with proper MIME types
 	router.NoRoute(func(c *gin.Context) {
 		path := c.Request.URL.Path
-		if !strings.HasPrefix(path, "/api") && !strings.HasPrefix(path, "/manga-images") {
-			c.File("./static/index.html")
-		} else {
+
+		// Skip API and manga-images routes
+		if strings.HasPrefix(path, "/api") || strings.HasPrefix(path, "/manga-images") {
 			c.Status(http.StatusNotFound)
+			return
 		}
+
+		filePath := "./static" + path
+		if _, err := os.Stat(filePath); err == nil {
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext == ".js" || ext == ".mjs" {
+				c.Header("Content-Type", "application/javascript")
+			} else if ext == ".css" {
+				c.Header("Content-Type", "text/css")
+			}
+			c.File(filePath)
+			return
+		}
+
+		// Default to index.html for SPA routing
+		c.File("./static/index.html")
 	})
 }
 
@@ -67,17 +97,13 @@ func main() {
 	// Set Gin to release mode in production
 	gin.SetMode(gin.ReleaseMode)
 
-	// Load application configuration
 	config := loadConfig()
 
-	// Setup logger
-	logFile := setupLogger(config)
-	defer logFile.Close()
+	// Initialize Zap logger
+	setupZapLogger(config)
+	defer zapLogger.Sync()
 
-	// Initialize Gin router
 	router := gin.New()
-
-	// Use Gin's Recovery middleware to recover from panics
 	router.Use(gin.Recovery())
 
 	// Custom logger middleware
@@ -85,13 +111,13 @@ func main() {
 		startTime := time.Now()
 		c.Next()
 		endTime := time.Now()
-		log.Printf(
-			"[%s] %s %s %d %s",
-			c.Request.Method,
-			c.Request.URL.Path,
-			c.ClientIP(),
-			c.Writer.Status(),
-			endTime.Sub(startTime),
+
+		zapLogger.Info("HTTP request",
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.Request.URL.Path),
+			zap.String("clientIP", c.ClientIP()),
+			zap.Int("status", c.Writer.Status()),
+			zap.Duration("latency", endTime.Sub(startTime)),
 		)
 	})
 
@@ -102,10 +128,12 @@ func main() {
 	routes.InitRoutes(config.MangaRootDir)
 	routes.SetupRoutes(router)
 
-	// Start the server
 	serverAddr := fmt.Sprintf(":%s", config.Port)
-	log.Printf("Starting manga server on http://localhost%s", serverAddr)
+	zapLogger.Info("Starting manga server",
+		zap.String("address", serverAddr),
+	)
+
 	if err := router.Run(serverAddr); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		zapLogger.Fatal("Failed to start server", zap.Error(err))
 	}
 }
